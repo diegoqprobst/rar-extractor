@@ -119,6 +119,29 @@ final class BsdtarExtractorTests: XCTestCase {
         await assertThrows(.archiveNotFound) { try await extractor.extract(archive: archive, intoParent: nil) }
     }
 
+    func test_cancel_killsToolAndCleansUp() async throws {
+        // Herramienta falsa que tarda 30 s: simula una extracción larga.
+        let script = tmp.appendingPathComponent("slow-tool.sh")
+        try "#!/bin/sh\nexec sleep 30\n".write(to: script, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        let archive = try stage("basic5.rar")
+        let slow = BsdtarExtractor(toolURL: script)
+
+        let start = Date()
+        let task = Task { try await slow.extract(archive: archive, intoParent: nil) }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("Se esperaba CancellationError")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("Error inesperado \(error)")
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5)
+        XCTAssertFalse(fm.fileExists(atPath: tmp.appendingPathComponent("basic5").path))
+    }
+
     func test_readOnlyParent_throws() async throws {
         let archive = try stage("basic5.rar")
         let ro = tmp.appendingPathComponent("ro")

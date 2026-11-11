@@ -24,6 +24,14 @@ private struct FakeExtractor: Extracting {
     }
 }
 
+/// Tarda 30 s salvo que lo cancelen.
+private struct SlowExtractor: Extracting {
+    func extract(archive: URL, intoParent parent: URL?) async throws -> URL {
+        try await Task.sleep(nanoseconds: 30_000_000_000)
+        return archive
+    }
+}
+
 @MainActor
 final class ExtractionQueueTests: XCTestCase {
     private func url(_ name: String) -> URL { URL(fileURLWithPath: "/in/\(name)") }
@@ -95,6 +103,26 @@ final class ExtractionQueueTests: XCTestCase {
         queue.enqueue([url("a.rar"), url("b.rar")])
         try await waitUntilIdle(queue)
         XCTAssertEqual(finished, [URL(fileURLWithPath: "/out/a")])
+    }
+
+    func test_isBusyWhileWork() async throws {
+        let queue = ExtractionQueue(extractor: FakeExtractor())
+        XCTAssertFalse(queue.isBusy)
+        queue.enqueue([url("a.rar")])
+        XCTAssertTrue(queue.isBusy)
+        try await waitUntilIdle(queue)
+        XCTAssertFalse(queue.isBusy)
+    }
+
+    func test_cancelAll_stopsRunningAndMarksPending() async throws {
+        let queue = ExtractionQueue(extractor: SlowExtractor())
+        queue.enqueue([url("a.rar"), url("b.rar")])
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let start = Date()
+        await queue.cancelAll()
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2)
+        XCTAssertFalse(queue.isBusy)
+        XCTAssertEqual(queue.jobs.map(\.state), [.failed("Cancelado."), .failed("Cancelado.")])
     }
 
     func test_clearFinishedKeepsPending() async throws {

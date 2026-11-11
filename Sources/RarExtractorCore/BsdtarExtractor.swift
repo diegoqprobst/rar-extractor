@@ -27,7 +27,17 @@ public struct BsdtarExtractor: Extracting {
         }
 
         let dest = try makeDestination(for: archive, in: folder, fm: fm)
-        let (code, stderr) = try await run(arguments: ["-x", "-f", archive.path, "-C", dest.path])
+        let code: Int32, stderr: String
+        do {
+            (code, stderr) = try await run(arguments: ["-x", "-f", archive.path, "-C", dest.path])
+        } catch {
+            try? fm.removeItem(at: dest)
+            throw error
+        }
+        if Task.isCancelled {
+            try? fm.removeItem(at: dest)
+            throw CancellationError()
+        }
         guard code == 0 else {
             try? fm.removeItem(at: dest)
             throw ExtractionError.classify(stderr: stderr, exitCode: code, archive: archive)
@@ -60,20 +70,41 @@ public struct BsdtarExtractor: Extracting {
         let errPipe = Pipe()
         process.standardError = errPipe
 
+        // Se termina cuando bsdtar salió Y stderr llegó a EOF. No se usa `waitUntilExit`:
+        // depende del run loop del hilo y se colgaba tras `terminate()`.
+        let group = DispatchGroup()
+        let stderrBox = DataBox()
+        group.enter()
+        process.terminationHandler = { _ in group.leave() }
+
         do {
             try process.run()
         } catch {
             throw ExtractionError.toolFailed(code: -1, message: "No se pudo ejecutar \(toolURL.path)")
         }
 
-        return await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                // Leer hasta EOF antes de esperar: si stderr llena el pipe, bsdtar se bloquearía.
-                let data = errPipe.fileHandleForReading.readDataToEndOfFile()
-                process.waitUntilExit()
-                let text = String(decoding: data, as: UTF8.self)
-                continuation.resume(returning: (process.terminationStatus, text))
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            // Leer hasta EOF mientras corre: si stderr llena el pipe, bsdtar se bloquearía.
+            stderrBox.data = errPipe.fileHandleForReading.readDataToEndOfFile()
+            group.leave()
+        }
+
+        // Cancelar la Task mata bsdtar (SIGTERM); el llamador borra la carpeta a medias.
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                group.notify(queue: .global(qos: .userInitiated)) {
+                    let text = String(decoding: stderrBox.data, as: UTF8.self)
+                    continuation.resume(returning: (process.terminationStatus, text))
+                }
             }
+        } onCancel: {
+            process.terminate()
         }
     }
+}
+
+/// Lo escribe un solo hilo y se lee después de `group.notify`, que ordena los accesos.
+private final class DataBox: @unchecked Sendable {
+    var data = Data()
 }

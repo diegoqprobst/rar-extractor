@@ -34,6 +34,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate()
     }
 
+    /// Con un único `Window`, SwiftUI cerraría la app al cerrar la ventana y perdería la cola.
+    /// La app sigue viva; un clic en el Dock vuelve a abrir la ventana.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    /// Al salir con trabajos pendientes se pregunta. Si el usuario confirma, se mata bsdtar
+    /// y se borra la carpeta a medias antes de cerrar: nunca quedan restos.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard queue.isBusy else { return .terminateNow }
+        let alert = NSAlert()
+        alert.messageText = "Hay archivos descomprimiéndose"
+        alert.informativeText = "Si sales ahora, se cancelarán y no quedará nada a medias."
+        alert.addButton(withTitle: "Seguir descomprimiendo")
+        alert.addButton(withTitle: "Salir")
+        guard alert.runModal() == .alertSecondButtonReturn else { return .terminateCancel }
+        Task { @MainActor in
+            await queue.cancelAll()
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     /// Doble clic en Finder, "Abrir con…" o soltar archivos sobre el icono del Dock.
     func application(_ application: NSApplication, open urls: [URL]) {
         queue.enqueue(urls)

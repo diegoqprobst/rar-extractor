@@ -68,7 +68,9 @@ enum RarInspector {
             default:
                 break
             }
-            offset += size + addSize
+            let (next, overflow) = offset.addingReportingOverflow(size + addSize)
+            guard !overflow else { break }
+            offset = next
         }
         return info
     }
@@ -110,7 +112,11 @@ enum RarInspector {
             default:
                 break
             }
-            offset = headerStart + headerSize + dataSize
+            // dataSize es un vint sin límite: un archivo corrupto puede desbordar la suma.
+            let (afterHeader, o1) = headerStart.addingReportingOverflow(headerSize)
+            let (next, o2) = afterHeader.addingReportingOverflow(dataSize)
+            guard !o1, !o2 else { break }
+            offset = next
         }
         return info
     }
@@ -122,6 +128,7 @@ enum RarInspector {
             let recordStart = p.index
             guard let type = p.next() else { return false }
             if type == 1 { return true }
+            guard size <= UInt64(extra.count - recordStart) else { return false }
             p.index = recordStart + Int(size)
         }
         return false

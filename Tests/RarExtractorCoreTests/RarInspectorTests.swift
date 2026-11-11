@@ -64,6 +64,24 @@ final class RarInspectorTests: XCTestCase {
         XCTAssertEqual(RarInspector.inspect(url)?.isMultiVolume, true)
     }
 
+    /// vint de 2^64 − 1.
+    private static let hugeVint: [UInt8] = Array(repeating: 0xFF, count: 9) + [0x01]
+
+    func test_rar5HugeDataSize_doesNotCrash() throws {
+        // main: type=1 flags=2(data) dataSize=2^64-1 archiveFlags=0 → 13 bytes
+        let header: [UInt8] = [0x01, 0x02] + Self.hugeVint + [0x00]
+        let url = try writeTemp(Self.rar5Sig + [0, 0, 0, 0, UInt8(header.count)] + header + [0, 0, 0, 0])
+        XCTAssertEqual(RarInspector.inspect(url), RarInfo(isEncrypted: false, isMultiVolume: false))
+    }
+
+    func test_rar5HugeExtraRecordSize_doesNotCrash() throws {
+        // file: type=2 flags=1(extra) extraSize=11 | extra: size=2^64-1 type=2 (no es cifrado)
+        let extra: [UInt8] = Self.hugeVint + [0x02]
+        let header: [UInt8] = [0x02, 0x01, UInt8(extra.count)] + extra
+        let url = try writeTemp(Self.rar5Sig + [0, 0, 0, 0, UInt8(header.count)] + header)
+        XCTAssertEqual(RarInspector.inspect(url), RarInfo(isEncrypted: false, isMultiVolume: false))
+    }
+
     func test_truncatedRar5_doesNotCrash() throws {
         let url = try writeTemp(Self.rar5Sig + [0, 0, 0, 0, 0xFF])
         XCTAssertEqual(RarInspector.inspect(url), RarInfo(isEncrypted: false, isMultiVolume: false))

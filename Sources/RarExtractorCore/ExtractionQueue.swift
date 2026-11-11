@@ -49,6 +49,24 @@ public final class ExtractionQueue: ObservableObject {
         jobs.removeAll { $0.state.isFinished }
     }
 
+    /// Hay trabajos esperando o en marcha.
+    public var isBusy: Bool {
+        jobs.contains { !$0.state.isFinished }
+    }
+
+    /// Detiene la extracción en curso (el extractor borra su carpeta a medias)
+    /// y marca como cancelado todo lo pendiente. Vuelve cuando ya no corre nada.
+    public func cancelAll() async {
+        let running = worker
+        running?.cancel()
+        for i in jobs.indices where !jobs[i].state.isFinished {
+            jobs[i].state = .failed(Self.cancelledMessage)
+        }
+        await running?.value
+    }
+
+    static let cancelledMessage = "Cancelado."
+
     private func startIfNeeded() {
         guard worker == nil else { return }
         worker = Task { [weak self] in
@@ -57,7 +75,7 @@ public final class ExtractionQueue: ObservableObject {
     }
 
     private func drain() async {
-        while let index = jobs.firstIndex(where: { $0.state == .waiting }) {
+        while !Task.isCancelled, let index = jobs.firstIndex(where: { $0.state == .waiting }) {
             let id = jobs[index].id
             let archive = jobs[index].archive
             let parent = destinationParent
@@ -66,6 +84,8 @@ public final class ExtractionQueue: ObservableObject {
                 let dest = try await extractor.extract(archive: archive, intoParent: parent)
                 setState(.done(dest), for: id)
                 onFinished?(dest)
+            } catch is CancellationError {
+                setState(.failed(Self.cancelledMessage), for: id)
             } catch let error as ExtractionError {
                 setState(.failed(error.userMessage), for: id)
             } catch {
