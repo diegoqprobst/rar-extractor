@@ -42,7 +42,37 @@ public struct BsdtarExtractor: Extracting {
             try? fm.removeItem(at: dest)
             throw ExtractionError.classify(stderr: stderr, exitCode: code, archive: archive)
         }
-        return dest
+        return flattenSingleRootFolder(dest, in: folder, fm: fm)
+    }
+
+    /// Si el archivo trae todo dentro de una única carpeta (`Fotos.rar` → `Fotos/…`),
+    /// evita `Fotos/Fotos/…`: esa carpeta sustituye a la de destino, con su propio nombre
+    /// (numerado si ya existe). Si algo falla al mover, se deja tal cual: nunca se pierde nada.
+    private func flattenSingleRootFolder(_ dest: URL, in folder: URL, fm: FileManager) -> URL {
+        guard let items = try? fm.contentsOfDirectory(at: dest, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]),
+              items.count == 1,
+              let inner = items.first,
+              let values = try? inner.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]),
+              values.isDirectory == true, values.isSymbolicLink != true
+        else { return dest }
+
+        let staging = folder.appendingPathComponent(".rarextractor-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try fm.moveItem(at: inner, to: staging)
+        } catch {
+            return dest
+        }
+        do {
+            try fm.removeItem(at: dest) // ya está vacía
+            let final = DestinationResolver.uniqueURL(named: inner.lastPathComponent, in: folder, fileManager: fm)
+            try fm.moveItem(at: staging, to: final)
+            return final
+        } catch {
+            // Vuelta atrás: dejar el contenido donde estaba.
+            try? fm.createDirectory(at: dest, withIntermediateDirectories: false)
+            try? fm.moveItem(at: staging, to: inner)
+            return dest
+        }
     }
 
     /// Reserva la carpeta creándola. Si otra extracción ganó la carrera, prueba el siguiente nombre.

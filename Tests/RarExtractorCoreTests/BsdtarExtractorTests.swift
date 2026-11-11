@@ -78,6 +78,67 @@ final class BsdtarExtractorTests: XCTestCase {
         XCTAssertEqual(dest.path, parent.appendingPathComponent("basic5").path)
     }
 
+    /// Crea un zip (bsdtar extrae cualquier formato) con las entradas dadas: ruta → contenido.
+    private func makeZip(at url: URL, entries: [String: String]) throws {
+        let py = Process()
+        py.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        let json = String(data: try JSONSerialization.data(withJSONObject: entries), encoding: .utf8)!
+        py.arguments = ["-I", "-c",
+                        "import sys, json, zipfile\nz = zipfile.ZipFile(sys.argv[1], 'w')\nfor k, v in json.loads(sys.argv[2]).items(): z.writestr(k, v)\nz.close()",
+                        url.path, json]
+        try py.run()
+        py.waitUntilExit()
+        XCTAssertEqual(py.terminationStatus, 0)
+    }
+
+    func test_singleRootFolder_sameName_isNotNested() async throws {
+        let archive = tmp.appendingPathComponent("Fotos.rar")
+        try makeZip(at: archive, entries: ["Fotos/a.txt": "a", "Fotos/sub/b.txt": "b"])
+        let dest = try await extractor.extract(archive: archive, intoParent: nil)
+        XCTAssertEqual(dest.path, tmp.appendingPathComponent("Fotos").path)
+        XCTAssertEqual(try entryNames(in: dest), ["a.txt", "sub", "sub/b.txt"])
+        XCTAssertEqual(try fm.contentsOfDirectory(atPath: tmp.path).sorted(), ["Fotos", "Fotos.rar"])
+    }
+
+    func test_singleRootFolder_otherName_usesFolderName() async throws {
+        let archive = tmp.appendingPathComponent("Paquete.rar")
+        try makeZip(at: archive, entries: ["Vacaciones/a.txt": "a"])
+        let dest = try await extractor.extract(archive: archive, intoParent: nil)
+        XCTAssertEqual(dest.path, tmp.appendingPathComponent("Vacaciones").path)
+        XCTAssertEqual(try entryNames(in: dest), ["a.txt"])
+        XCTAssertFalse(fm.fileExists(atPath: tmp.appendingPathComponent("Paquete").path))
+    }
+
+    func test_singleRootFolder_nameTaken_getsNumberAndLeavesExistingAlone() async throws {
+        let existing = tmp.appendingPathComponent("Vacaciones")
+        try fm.createDirectory(at: existing, withIntermediateDirectories: false)
+        try "mío".write(to: existing.appendingPathComponent("viejo.txt"), atomically: true, encoding: .utf8)
+        let archive = tmp.appendingPathComponent("Paquete.rar")
+        try makeZip(at: archive, entries: ["Vacaciones/a.txt": "a"])
+
+        let dest = try await extractor.extract(archive: archive, intoParent: nil)
+        XCTAssertEqual(dest.lastPathComponent, "Vacaciones 2")
+        XCTAssertEqual(try entryNames(in: dest), ["a.txt"])
+        XCTAssertEqual(try entryNames(in: existing), ["viejo.txt"])
+    }
+
+    func test_singleRootFolder_twice_numbersSecond() async throws {
+        let archive = tmp.appendingPathComponent("Fotos.rar")
+        try makeZip(at: archive, entries: ["Fotos/a.txt": "a"])
+        _ = try await extractor.extract(archive: archive, intoParent: nil)
+        let second = try await extractor.extract(archive: archive, intoParent: nil)
+        XCTAssertEqual(second.lastPathComponent, "Fotos 2")
+        XCTAssertEqual(try entryNames(in: second), ["a.txt"])
+    }
+
+    func test_singleFile_staysInArchiveFolder() async throws {
+        // basic5.rar solo tiene helloworld.txt: se mantiene dentro de basic5/.
+        let archive = try stage("basic5.rar")
+        let dest = try await extractor.extract(archive: archive, intoParent: nil)
+        XCTAssertEqual(dest.lastPathComponent, "basic5")
+        XCTAssertEqual(try entryNames(in: dest), ["helloworld.txt"])
+    }
+
     func test_zipSlipStaysInside() async throws {
         let inner = tmp.appendingPathComponent("inner")
         try fm.createDirectory(at: inner, withIntermediateDirectories: false)

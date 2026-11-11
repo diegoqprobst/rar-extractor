@@ -21,8 +21,13 @@ public enum DestinationResolver {
         in parent: URL? = nil,
         fileManager: FileManager = .default
     ) -> URL {
-        let folder = parent ?? archive.deletingLastPathComponent()
-        let base = baseName(for: archive)
+        uniqueURL(named: baseName(for: archive), in: parent ?? archive.deletingLastPathComponent(),
+                  fileManager: fileManager)
+    }
+
+    /// `folder/name`, o `folder/name 2`, `name 3`… si ya existe.
+    public static func uniqueURL(named base: String, in folder: URL,
+                                 fileManager: FileManager = .default) -> URL {
         var candidate = folder.appendingPathComponent(base, isDirectory: true)
         var n = 2
         while fileManager.fileExists(atPath: candidate.path) {
