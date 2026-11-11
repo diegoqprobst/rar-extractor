@@ -6,10 +6,13 @@ cd "$(dirname "$0")"
 CONFIG="${1:-release}"
 APP="build/RarExtractor.app"
 
-echo "==> swift build -c $CONFIG"
-swift build -c "$CONFIG"
+# Binario universal: funciona en Apple Silicon y en Mac Intel.
+ARCH_FLAGS=(--arch arm64 --arch x86_64)
 
-BIN=".build/$CONFIG/RarExtractor"
+echo "==> swift build -c $CONFIG (arm64 + x86_64)"
+swift build -c "$CONFIG" "${ARCH_FLAGS[@]}"
+
+BIN="$(swift build -c "$CONFIG" "${ARCH_FLAGS[@]}" --show-bin-path)/RarExtractor"
 [ -f "$BIN" ] || { echo "no se encontró el binario en $BIN"; exit 1; }
 
 echo "==> armando $APP"
@@ -25,3 +28,10 @@ codesign --force --sign - --identifier com.diego.rarextractor "$APP"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" || true
 
 echo "==> listo: $APP"
+
+# Con "zip": deja build/RarExtractor.zip listo para publicar (ditto conserva el bundle y la firma).
+if [ "${2:-}" = "zip" ]; then
+  rm -f build/RarExtractor.zip
+  ditto -c -k --keepParent "$APP" build/RarExtractor.zip
+  echo "==> zip: build/RarExtractor.zip"
+fi
